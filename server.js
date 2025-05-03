@@ -8,65 +8,42 @@ app.use(cors());
 
 app.get("/m3u", async (req, res) => {
   const url = req.query.url;
-
-  // Verificare URL (acceptă și HTTPS)
+  
+  // Allow both http and https URLs
   if (!url || !(url.startsWith("http://") || url.startsWith("https://"))) {
-    return res.status(400).json({ 
-      error: "URL invalid sau lipsă. Folosește http:// sau https://." 
-    });
+    return res.status(400).send("URL invalid sau lipsa.");
   }
-
+  
   try {
-    // Configurare fetch cu headere de player real (VLC) și timeout
+    // Add more comprehensive headers
     const response = await fetch(url, {
       headers: {
-        "User-Agent": "VLC/3.0.16 LibVLC/3.0.16", // Mimică cereri VLC
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
         "Accept": "*/*",
-        "Referer": "https://www.google.com/", // Evită blocarea ca bot
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "keep-alive",
       },
-      redirect: 'follow', // Urmează redirectări
-      timeout: 10000, // 10 secunde timeout
+      timeout: 15000 // Add timeout of 15 seconds
     });
-
+    
     if (!response.ok) {
-      console.error(`Eroare la fetch: ${response.status} ${response.statusText}`);
-      return res.status(502).json({ 
-        error: `Eroare la conectare la sursă (${response.status} ${response.statusText})`,
-      });
+      console.error(`Fetch error: ${response.status} ${response.statusText}`);
+      return res.status(response.status).send(`Eroare la fetch: ${response.status} ${response.statusText}`);
     }
-
+    
     const data = await response.text();
-
-    // Verifică dacă răspunsul este un fișier M3U valid (opțional)
-    if (!data.includes("#EXTM3U")) {
-      console.warn("Răspunsul nu pare a fi un fișier M3U valid.");
-      // Trimite totuși datele, dar cu un avertisment
-      res.set("Content-Type", "text/plain");
-      return res.send(data);
-    }
-
-    // Răspuns succes
     res.set("Content-Type", "application/x-mpegURL");
     res.send(data);
-
   } catch (err) {
-    console.error("Eroare detaliată:", err);
-
-    // Mesaje personalizate pentru diferite tipuri de erori
-    let errorMessage = "Eroare la descărcare";
-    if (err.name === "AbortError") {
-      errorMessage = "Timeout: Serverul M3U nu a răspuns în 10 secunde.";
-    } else if (err.code === "ECONNREFUSED") {
-      errorMessage = "Conexiune refuzată (serverul țintă poate fi down).";
-    }
-
-    res.status(500).json({ 
-      error: errorMessage,
-      details: err.message 
-    });
+    console.error("Error details:", err.message);
+    res.status(500).send(`Eroare la descarcare: ${err.message}`);
   }
 });
 
-// Portul este setat din variabila de mediu (Render folosește 10000)
+// Add a simple health check endpoint
+app.get("/", (req, res) => {
+  res.send("M3U Proxy Server is running");
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Proxy activ pe portul ${PORT}`));
+app.listen(PORT, () => console.log("Proxy activ pe portul " + PORT));
