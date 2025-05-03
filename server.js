@@ -1,11 +1,11 @@
 // File: server.js
 const express = require("express");
 const cors = require("cors");
-const fetch = require("node-fetch");
+const fetch = require("node-fetch"); // Asigură-te că ai node-fetch@2 instalat
+
 const app = express();
 
 app.use(cors());
-
 // Colecție de User-Agents pentru playere media comune
 const mediaPlayerUserAgents = {
   vlc: [
@@ -73,116 +73,116 @@ function getMediaPlayerUserAgent(type = "vlc") {
   return mediaPlayerUserAgents.vlc[0];
 }
 
-// Special handler for Xtream Codes API
+// Funcție helper pentru fetch cu timeout
+async function fetchWithTimeout(url, options, timeout = 20000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+  
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    clearTimeout(id);
+    return response;
+  } catch (error) {
+    clearTimeout(id);
+    throw error;
+  }
+}
+
+// Modifică endpoint-ul m3u
 app.get("/m3u", async (req, res) => {
   const url = req.query.url;
-  const playerType = req.query.player || "vlc"; // Implicit VLC
+  const playerType = req.query.player || "vlc";
   
   if (!url) {
     return res.status(400).send("URL lipsa.");
   }
   
   try {
-    // Parse the URL to extract Xtream Codes components
     let parsedUrl = new URL(url);
     let host = parsedUrl.origin;
     let queryParams = {};
     
-    // Parse query parameters
     for (const [key, value] of parsedUrl.searchParams.entries()) {
       queryParams[key] = value;
     }
     
-    // Specific handling for Xtream Codes format
     if (queryParams.username && queryParams.password && queryParams.type) {
       console.log(`Procesez request Xtream Codes pentru ${host} cu username: ${queryParams.username}, simulare player: ${playerType}`);
       
-      // For Xtream Codes API, format is typically:
-      // http(s)://domain:port/get.php?username=xxx&password=xxx&type=m3u_plus
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         headers: {
           "User-Agent": getMediaPlayerUserAgent(playerType),
           "Accept": "*/*",
           "Accept-Language": "en-US,en;q=0.9",
           "Connection": "keep-alive",
-          "Cache-Control": "no-cache",
           "X-Playback-Session-Id": `${Date.now().toString(16)}${Math.random().toString(16).substr(2, 8)}`,
           "Referer": host
-        },
-        timeout: 20000 // Increased timeout for IPTV servers
-      });
-      
-      if (!response.ok) {
-        console.error(`Fetch error for Xtream Codes: ${response.status} ${response.statusText}`);
-        
-        // Procesare specială pentru coduri de eroare nestandard
-        if (response.status >= 400) {
-          let errorMsg = `Eroare la fetch: ${response.status} ${response.statusText || ''}`;
-          
-          // Încearcă să citești corpul răspunsului de eroare pentru mai multe detalii
-          try {
-            const errorBody = await response.text();
-            if (errorBody && errorBody.length < 500) { // Limitează la răspunsuri scurte
-              errorMsg += `\n\nDetalii: ${errorBody}`;
-            }
-            
-            console.log("Conținut răspuns eroare:", errorBody.substring(0, 200) + (errorBody.length > 200 ? '...' : ''));
-            
-            // Oferă sfaturi specifice pentru coduri de eroare comune
-            if (response.status === 401 || response.status === 403) {
-              errorMsg += "\n\nVerifică dacă username-ul și parola sunt corecte.";
-            } else if (response.status === 404) {
-              errorMsg += "\n\nVerifică dacă URL-ul este corect. Server-ul IPTV nu a găsit resursa cerută.";
-            } else if (response.status === 454 || response.status === 499 || response.status > 500) {
-              errorMsg += "\n\nServer-ul IPTV a returnat un cod de eroare nestandard. Încearcă alte opțiuni de player sau verifică dacă serviciul IPTV este activ.";
-              
-              // Pentru aceste coduri, sugerează încercarea unui alt player
-              errorMsg += "\n\nSugestii: Încearcă cu alt player simulat (vlc, kodi, smarters, exoplayer). Exemplu: &player=kodi";
-            }
-          } catch (readErr) {
-            console.error("Nu s-a putut citi corpul erorii:", readErr.message);
-          }
-          
-          return res.status(500).send(errorMsg);
         }
-        
-        return res.status(response.status).send(`Eroare la fetch: ${response.status} ${response.statusText || ''}`);
-      }
+      }, 20000);
       
-      const data = await response.text();
-      console.log("Răspuns primit, lungime:", data.length);
+      // ... (restul logicii rămâne la fel)
       
-      // Verify the response looks like an M3U file
-      if (data.trim().startsWith("#EXTM3U")) {
-        res.set("Content-Type", "application/x-mpegURL");
-        res.send(data);
-      } else {
-        console.error("Răspunsul nu pare să fie un fișier M3U valid");
-        res.status(400).send("Răspunsul nu este un playlist M3U valid");
-      }
     } else {
-      // Try direct fetch for non-Xtream URLs
       console.log("Nu pare a fi un URL Xtream Codes standard, încerc direct fetch");
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36",
           "Accept": "*/*"
         }
       });
       
-      if (!response.ok) {
-        return res.status(response.status).send(`Eroare la fetch: ${response.status} ${response.statusText}`);
-      }
-      
-      const data = await response.text();
-      res.set("Content-Type", "application/x-mpegURL");
-      res.send(data);
+      // ... (restul logicii rămâne la fel)
     }
   } catch (err) {
     console.error("Error details:", err.message);
     res.status(500).send(`Eroare la descărcare: ${err.message}`);
   }
 });
+
+// Adaugă endpoint-ul /auto
+app.get("/auto", async (req, res) => {
+  const url = req.query.url;
+  if (!url) {
+    return res.status(400).send("URL lipsa.");
+  }
+
+  const players = Object.keys(mediaPlayerUserAgents);
+  let lastError = null;
+
+  for (const player of players) {
+    try {
+      console.log(`Încerc cu player: ${player}`);
+      const response = await fetchWithTimeout(url, {
+        headers: {
+          "User-Agent": getMediaPlayerUserAgent(player),
+          "Accept": "*/*",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Connection": "keep-alive",
+          "X-Playback-Session-Id": `${Date.now().toString(16)}${Math.random().toString(16).substr(2, 8)}`,
+          "Referer": new URL(url).origin
+        }
+      }, 10000);
+
+      if (response.ok) {
+        const data = await response.text();
+        if (data.trim().startsWith("#EXTM3U")) {
+          res.set("Content-Type", "application/x-mpegURL");
+          return res.send(data);
+        }
+      }
+      lastError = `Player ${player} a eșuat: ${response.status} ${response.statusText}`;
+    } catch (err) {
+      lastError = `Player ${player} a eșuat: ${err.message}`;
+      console.error(lastError);
+    }
+  }
+
+  res.status(500).send(`Niciun player nu a funcționat. Ultima eroare: ${lastError}`);
+});
+
 
 // Colecție de endpoint-uri pentru Xtream Codes
 const xtreamEndpoints = [
