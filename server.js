@@ -1,4 +1,85 @@
-// File: server.js
+// Funcție ajutătoare pentru a încerca diferite variante de request
+async function tryMultipleRequestMethods(url, playerTypes = ["vlc", "kodi", "exoplayer", "smarters", "browser"]) {
+  let lastError = null;
+  let responseData = null;
+  
+  // Încearcă fiecare tip de player pe rând
+  for (const player of playerTypes) {
+    try {
+      console.log(`Încercăm cu player: ${player}`);
+      const refererDomain = new URL(url).origin;
+      
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": getMediaPlayerUserAgent(player),
+          "Accept": "*/*",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Accept-Encoding": "gzip, deflate, br",
+          "Connection": "keep-alive",
+          "Cache-Control": "no-cache",
+          "X-Playback-Session-Id": `${Date.now().toString(16)}${Math.random().toString(16).substr(2, 8)}`,
+          "Referer": refererDomain,
+          "Origin": refererDomain
+        },
+        timeout: 15000
+      });
+      
+      if (response.ok) {
+        responseData = await response.text();
+        if (responseData.trim().startsWith("#EXTM3U")) {
+          console.log(`Succes cu player: ${player}`);
+          return { 
+            success: true, 
+            data: responseData, 
+            player,
+            status: response.status,
+            headers: Object.fromEntries(response.headers.entries())
+          };
+        }
+      }
+      
+      lastError = { 
+        status: response.status, 
+        statusText: response.statusText,
+        player 
+      };
+    } catch (err) {
+      console.error(`Eroare cu player ${player}:`, err.message);
+      lastError = { error: err.message, player };
+    }
+  }
+  
+  return { 
+    success: false, 
+    error: `Toate încercările au eșuat. Ultima eroare (${lastError.player}): ${lastError.status || ''} ${lastError.statusText || lastError.error || ''}` 
+  };
+}
+
+// Adaugă un nou endpoint "auto" care încearcă toate metodele posibile
+app.get("/auto", async (req, res) => {
+  const url = req.query.url;
+  
+  if (!url) {
+    return res.status(400).send("URL lipsă.");
+  }
+  
+  try {
+    console.log(`Procesez request AUTO pentru ${url}`);
+    
+    const result = await tryMultipleRequestMethods(url);
+    
+    if (result.success) {
+      res.set("Content-Type", "application/x-mpegURL");
+      res.set("X-Successful-Player", result.player);
+      res.send(result.data);
+    } else {
+      res.status(500).send(`Toate încercările au eșuat. ${result.error}`);
+    }
+  } catch (err) {
+    console.error("Auto fetch error:", err);
+    res.status(500).send(`Eroare generală: ${err.message}`);
+  }
+});// File: server.js
 const express = require("express");
 const cors = require("cors");
 const fetch = require("node-fetch");
@@ -115,14 +196,38 @@ app.get("/m3u", async (req, res) => {
       if (!response.ok) {
         console.error(`Fetch error for Xtream Codes: ${response.status} ${response.statusText}`);
         
-        // More detailed debugging for 404 errors
-        if (response.status === 404) {
-          return res.status(404).send(`Server-ul Xtream Codes a returnat 404 Not Found. 
-          Verifică dacă URL-ul, username-ul și parola sunt corecte.
-          Asigură-te că provider-ul este online și că folosești endpoint-ul corect.`);
+        // Procesare specială pentru coduri de eroare nestandard
+        if (response.status >= 400) {
+          let errorMsg = `Eroare la fetch: ${response.status} ${response.statusText || ''}`;
+          
+          // Încearcă să citești corpul răspunsului de eroare pentru mai multe detalii
+          try {
+            const errorBody = await response.text();
+            if (errorBody && errorBody.length < 500) { // Limitează la răspunsuri scurte
+              errorMsg += `\n\nDetalii: ${errorBody}`;
+            }
+            
+            console.log("Conținut răspuns eroare:", errorBody.substring(0, 200) + (errorBody.length > 200 ? '...' : ''));
+            
+            // Oferă sfaturi specifice pentru coduri de eroare comune
+            if (response.status === 401 || response.status === 403) {
+              errorMsg += "\n\nVerifică dacă username-ul și parola sunt corecte.";
+            } else if (response.status === 404) {
+              errorMsg += "\n\nVerifică dacă URL-ul este corect. Server-ul IPTV nu a găsit resursa cerută.";
+            } else if (response.status === 454 || response.status === 499 || response.status > 500) {
+              errorMsg += "\n\nServer-ul IPTV a returnat un cod de eroare nestandard. Încearcă alte opțiuni de player sau verifică dacă serviciul IPTV este activ.";
+              
+              // Pentru aceste coduri, sugerează încercarea unui alt player
+              errorMsg += "\n\nSugestii: Încearcă cu alt player simulat (vlc, kodi, smarters, exoplayer). Exemplu: &player=kodi";
+            }
+          } catch (readErr) {
+            console.error("Nu s-a putut citi corpul erorii:", readErr.message);
+          }
+          
+          return res.status(500).send(errorMsg);
         }
         
-        return res.status(response.status).send(`Eroare la fetch: ${response.status} ${response.statusText}`);
+        return res.status(response.status).send(`Eroare la fetch: ${response.status} ${response.statusText || ''}`);
       }
       
       const data = await response.text();
@@ -346,13 +451,24 @@ app.get("/", (req, res) => {
       <style>
         body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
         h1 { color: #333; }
+        h2 { margin-top: 25px; }
         .code { background: #f4f4f4; padding: 10px; border-radius: 5px; font-family: monospace; overflow-x: auto; }
         .player-option { margin-bottom: 10px; }
+        .new-feature { background: #e6f7ff; border-left: 4px solid #1890ff; padding: 10px; margin: 20px 0; }
+        .error-solution { background: #fff7e6; border-left: 4px solid #fa8c16; padding: 10px; margin: 20px 0; }
       </style>
     </head>
     <body>
       <h1>M3U Xtream Codes Proxy</h1>
       <p>Server-ul de proxy pentru M3U/Xtream Codes este activ.</p>
+      
+      <div class="new-feature">
+        <strong>📣 NOUTATE!</strong> Am adăugat un endpoint <code>/auto</code> care încearcă automat toate tipurile de player până găsește unul care funcționează!
+      </div>
+      
+      <div class="error-solution">
+        <strong>🔧 Depanare erori:</strong> Dacă primești erori de tipul "454 undefined", încearcă noul endpoint <code>/auto</code> sau diferite playere (kodi, vlc, exoplayer).
+      </div>
       
       <h2>Cum să folosești:</h2>
       <p>Pentru Xtream Codes, folosește URL-ul în următorul format:</p>
@@ -360,22 +476,32 @@ app.get("/", (req, res) => {
         /m3u?url=http://provider.com:8080/get.php?username=USER&password=PASS&type=m3u_plus&player=vlc
       </div>
       
-      <p>Pentru a testa direct un provider Xtream Codes:</p>
+      <p><strong>NOU!</strong> Pentru a încerca automat toate tipurile de player (recomandat pentru depanare):</p>
       <div class="code">
-        /test-xtream?host=provider.com&port=8080&username=USER&password=PASS
+        /auto?url=http://provider.com:8080/get.php?username=USER&password=PASS&type=m3u_plus
       </div>
       
-      <p>Pentru streaming direct (opțiune nouă):</p>
+      <p>Pentru a testa direct un provider Xtream Codes:</p>
       <div class="code">
-        /stream?url=http://provider.com:8080/stream/channelid.ts&player=vlc
+        /test-xtream?host=provider.com&port=8080&username=USER&password=PASS&player=vlc
+      </div>
+      
+      <p>Pentru streaming direct:</p>
+      <div class="code">
+        /stream?url=http://provider.com:8080/live/USER/PASS/1234.ts&player=vlc
       </div>
       
       <h2>Opțiuni de simulare player:</h2>
       <p>Poți specifica tipul de player media folosit pentru request adăugând <code>&player=XXX</code> la URL:</p>
       <div class="player-option"><strong>vlc</strong> - Simulează VLC Player (implicit)</div>
+      <div class="player-option"><strong>kodi</strong> - Simulează Kodi Media Center</div>
       <div class="player-option"><strong>appletv</strong> - Simulează Apple TV</div>
+      <div class="player-option"><strong>ffmpeg</strong> - Simulează FFmpeg library</div>
       <div class="player-option"><strong>smarters</strong> - Simulează IPTV Smarters</div>
       <div class="player-option"><strong>exoplayer</strong> - Simulează ExoPlayer</div>
+      <div class="player-option"><strong>browser</strong> - Simulează browser web</div>
+      <div class="player-option"><strong>gse</strong> - Simulează GSE Smart IPTV</div>
+      <div class="player-option"><strong>iptv</strong> - Simulează alte playere IPTV</div>
       <div class="player-option"><strong>random</strong> - Alege aleatoriu un User-Agent</div>
     </body>
     </html>
